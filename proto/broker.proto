@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package binnacle.v1;
+
+// Contrato entre productores/consumidores y el broker (Fase 0 — Hito Semana 1).
+// Este servicio cubre un broker de un solo nodo: sin replicación ni grupos de
+// consumidores todavía. Los campos marcados "reservado para..." se dejan sin
+// usar a propósito para no romper la numeración cuando se agreguen en hitos
+// posteriores.
+service BrokerService {
+  // Crea un topic con un número fijo de particiones.
+  rpc CreateTopic(CreateTopicRequest) returns (CreateTopicResponse);
+
+  // Publica uno o más registros en una partición de un topic.
+  rpc Produce(ProduceRequest) returns (ProduceResponse);
+
+  // Lee registros de una partición a partir de un offset dado.
+  rpc Fetch(FetchRequest) returns (FetchResponse);
+}
+
+// Datos de un evento tal como los entrega el productor. No incluye offset:
+// el offset lo asigna el broker al escribir el registro en el log.
+message Record {
+  bytes key = 1;
+  bytes value = 2;
+  int64 timestamp = 3; // epoch millis, asignado por el productor
+}
+
+// Un registro ya persistido, devuelto en un Fetch junto con el offset
+// que el broker le asignó.
+message FetchedRecord {
+  int64 offset = 1;
+  Record record = 2;
+}
+
+message CreateTopicRequest {
+  string topic = 1;
+  int32 num_partitions = 2;
+  int32 replication_factor = 3; // ignorado en Semana 1, sin replicación aún
+}
+
+message CreateTopicResponse {
+  string topic = 1;
+  int32 num_partitions = 2;
+}
+
+message ProduceRequest {
+  string topic = 1;
+  int32 partition = 2;
+  repeated Record records = 3; // batching: varios registros por llamada
+  // reservado 4-5: policy de ack (solo líder / líder + réplicas mínimas)
+}
+
+message ProduceResponse {
+  int32 partition = 1;
+  int64 base_offset = 2; // offset asignado al primer registro del batch
+}
+
+message FetchRequest {
+  string topic = 1;
+  int32 partition = 2;
+  int64 offset = 3;
+  int32 max_bytes = 4;
+}
+
+message FetchResponse {
+  repeated FetchedRecord records = 1;
+  int64 high_watermark = 2; // offset del próximo registro a escribir
+}
