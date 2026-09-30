@@ -43,6 +43,37 @@ El objetivo de Binnacle no es solo implementar una cola de mensajes. Es diseñar
 | **Grupo de consumidores** | Conjunto de consumidores que se reparten las particiones de un topic. |
 | **Rebalanceo** | Reasignación de particiones cuando un consumidor entra o sale del grupo. |
 
+## Fases del proyecto
+
+| Fase | Hito | Objetivo |
+|---|---|---|
+| Fase 1 — Prototipo con Ray | 1 | Entender el problema usando Ray como middleware y congelar el contrato observable. |
+| Fase 2 — Diseño nativo en Go | 2 y 3 | Reconstruir el mismo problema con mecanismos explícitos: broker, WAL, replicación, elección de líder, grupos y offsets. |
+| Fase 3 — Verificación y defensa | 4 | Demostrar con evidencia qué garantiza el sistema bajo fallos y cargas. |
+
+Ray solo se usa en la Fase 1. A partir de la Fase 2 está prohibido como dependencia runtime.
+
+## Estructura del repositorio
+
+| Carpeta | Contenido |
+|---|---|
+| `cmd/` | Binarios: `broker`, `producer`, `consumer`. |
+| `internal/broker` | Servicio gRPC y gestor de topics/particiones. |
+| `internal/storage` | WAL por partición, índice de offsets y recuperación. |
+| `internal/replication` | Replicación líder-réplica, réplicas sincronizadas y reconciliación. |
+| `internal/election` | Heartbeats, detección de fallos y elección de líder. |
+| `internal/group` | Coordinador de grupos de consumidores y rebalanceo. |
+| `internal/metadata` | Líderes, offsets confirmados y membresía. |
+| `internal/client` | Biblioteca cliente del productor y del consumidor. |
+| `internal/metrics` | Endpoint de métricas y logs estructurados. |
+| `proto/` | Contrato gRPC (`broker.proto`). |
+| `ray-prototype/` | Prototipo de la Fase 1 (Python + Ray). |
+| `experiments/` | Registros experimentales (10 campos). |
+| `tests/` | Pruebas de extremo a extremo y campaña de fallos. |
+| `deploy/` | Dockerfiles y Docker Compose. |
+| `web/` | Panel de monitoreo (opcional). |
+| `docs/` | Contrato, decisiones, arquitectura e informes. |
+
 ## Estado del proyecto
 
 En desarrollo.
