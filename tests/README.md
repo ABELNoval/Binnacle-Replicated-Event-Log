@@ -1,5 +1,10 @@
-# Tests
+# tests
 
-Suite de pruebas de fallos. Conjunto de pruebas que demuestran las garantías declaradas (durabilidad, orden, recuperación de líder, rebalanceo).
+Pruebas de extremo a extremo y la campaña de fallos. Los tests unitarios de Go viven junto al código (`*_test.go`) y se ejecutan con `go test -race ./...`.
 
-Scripts que arrancan el clúster, inyectan fallos (matar un contenedor, cortar red) y verifican que el sistema se recupera según lo prometido en el diseño.
+- **Pruebas públicas deterministas:** arrancan el clúster, ejecutan un workload y verifican el comportamiento esperado.
+- **Harness de inyección de fallos:** detener/matar contenedores, retraso y pérdida de paquetes (`tc netem`), particiones de red (`docker network disconnect`) y recolección de evidencia.
+- **Campaña mínima común:** caso normal, crash, crash/restart, degradación, partición + heal, duplicado/respuesta perdida, carga concurrente y sobrecarga.
+- **Campaña específica del event log:** fallo del líder (F15), reinicio de consumidor y procesamiento duplicado.
+
+Los registros de cada experimento (10 campos) se guardan en `experiments/`.
