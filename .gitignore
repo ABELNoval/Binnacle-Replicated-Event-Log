@@ -34,6 +34,7 @@ data/
 __pycache__/
 *.pyc
 .venv/
+venv/
 
 # Editor/IDE
 # .idea/
