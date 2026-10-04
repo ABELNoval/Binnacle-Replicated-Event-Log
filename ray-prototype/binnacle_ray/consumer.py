@@ -119,6 +119,9 @@ class Consumer:
         This mirrors Kafka's position commit API. ``run()`` uses the narrower
         per-record commit after the application handler succeeds, so records
         that were polled but not yet handled are not acknowledged.
+
+        Calling this after ``poll()`` but before handling the records gives
+        at-most-once: a crash then loses them.
         """
         ray.get(
             [
@@ -155,21 +158,28 @@ class Consumer:
 
         processed = 0
         idle_since = time.monotonic()
-        while max_messages is None or processed < max_messages:
-            remaining = None if max_messages is None else max_messages - processed
-            batch = self.poll(max_records=max_records if remaining is None else min(max_records, remaining))
-            if not batch:
-                if idle_timeout_s is not None and time.monotonic() - idle_since >= idle_timeout_s:
-                    break
-                time.sleep(poll_interval_s)
-                continue
-            idle_since = time.monotonic()
-            for consumed in batch:
-                if max_messages is not None and processed >= max_messages:
-                    break
-                handler(consumed)
-                self.commit_offset(consumed.partition, consumed.offset + 1)
-                processed += 1
+        try:
+            while max_messages is None or processed < max_messages:
+                remaining = None if max_messages is None else max_messages - processed
+                batch = self.poll(max_records=max_records if remaining is None else min(max_records, remaining))
+                if not batch:
+                    if idle_timeout_s is not None and time.monotonic() - idle_since >= idle_timeout_s:
+                        break
+                    time.sleep(poll_interval_s)
+                    continue
+                idle_since = time.monotonic()
+                for consumed in batch:
+                    if max_messages is not None and processed >= max_messages:
+                        break
+                    handler(consumed)
+                    self.commit_offset(consumed.partition, consumed.offset + 1)
+                    processed += 1
+        finally:
+            # poll() advances positions past records that may never reach the
+            # handler (early stop or handler error). Every handled record is
+            # committed, so committed == handled: rewind to it so this instance
+            # does not skip the polled-but-unhandled records on its next run().
+            self.seek_to_committed()
         return processed
 
     def _load_committed_positions(self) -> dict[int, int]:

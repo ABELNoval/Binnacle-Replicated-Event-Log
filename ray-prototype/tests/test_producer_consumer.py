@@ -142,3 +142,40 @@ def test_run_commits_after_handling_and_new_consumer_continues(registry, offset_
         (partition, offset) for partition in range(2) for offset in range(3)
     }
     assert ray.get(offset_store.committed_offsets.remote(group, topic)) == {0: 3, 1: 3}
+
+
+def _fill(registry, topic: str, partitions: int, per_partition: int) -> None:
+    ray.get(registry.create_topic.remote(topic, partitions))
+    for handle in ray.get(registry.get_partitions.remote(topic)):
+        ray.get(handle.append.remote([Record(key=b"k", value=b"v")] * per_partition))
+
+
+def test_same_instance_does_not_skip_records_after_early_stop(registry, offset_store):
+    topic = topic_name("early-stop")
+    _fill(registry, topic, partitions=3, per_partition=4)
+    consumer = Consumer(topic, "g", registry=registry, offset_store=offset_store)
+
+    seen = []
+    consumer.run(lambda r: seen.append((r.partition, r.offset)), max_messages=4, max_records=10)
+    consumer.run(lambda r: seen.append((r.partition, r.offset)), idle_timeout_s=0.2)
+
+    assert sorted(seen) == [(p, o) for p in range(3) for o in range(4)]
+
+
+def test_same_instance_retries_record_after_handler_error(registry, offset_store):
+    topic = topic_name("handler-error")
+    _fill(registry, topic, partitions=1, per_partition=3)
+    consumer = Consumer(topic, "g", registry=registry, offset_store=offset_store)
+
+    def fail_on_offset_1(record):
+        if record.offset == 1:
+            raise RuntimeError("handler failed")
+
+    with pytest.raises(RuntimeError):
+        consumer.run(fail_on_offset_1)
+    assert consumer.committed_offsets() == {0: 1}
+    assert consumer.positions == {0: 1}
+
+    seen = []
+    consumer.run(lambda r: seen.append(r.offset), idle_timeout_s=0.2)
+    assert seen == [1, 2]
