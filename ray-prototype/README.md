@@ -43,4 +43,18 @@ Siempre desde `ray-prototype/`, porque los workers de Ray importan `binnacle_ray
 
 La demo extremo a extremo crea un topic nuevo, arranca un consumidor, publica desde otro proceso, detiene el consumidor después de `--first-run` mensajes y arranca una segunda instancia con el mismo grupo. La validación exige que no haya duplicados, que los offsets de cada partición sean contiguos y en orden, y que el `OffsetStore` termine con el próximo offset de cada partición.
 
+### Uso manual de los CLI
+
+`producer_cli.py` y `consumer_cli.py` se conectan a un clúster Ray **ya arrancado** (`address="auto"`), y el topic debe existir antes. `demo_partitions.py` se conecta al clúster si está arrancado y crea el topic `demo`:
+
+```powershell
+.\.venv\Scripts\ray start --head --include-dashboard=false
+.\.venv\Scripts\python demo_partitions.py
+.\.venv\Scripts\python producer_cli.py --topic demo --count 10
+.\.venv\Scripts\python consumer_cli.py --topic demo --group g1 --idle-timeout-s 2
+.\.venv\Scripts\ray stop
+```
+
+Si vuelves a lanzar el consumidor con el mismo `--group`, reanuda desde el último offset confirmado. `ray stop` borra todo el estado (topics, logs y offsets), porque vive en memoria.
+
 Semántica de offsets: un offset confirmado es el **próximo registro por consumir**. Por eso, tras procesar el registro en offset `n`, el consumidor confirma `n + 1`. Si un grupo nunca ha confirmado una partición, empieza en `0`. La asignación de particiones es estática (`--partitions 0,2` o todas por defecto); el rebalanceo real queda fuera de este prototipo.
