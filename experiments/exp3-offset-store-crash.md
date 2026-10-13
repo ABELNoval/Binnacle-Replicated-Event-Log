@@ -16,13 +16,11 @@ Si muere el almacén de offsets, un consumidor nuevo vuelve a empezar desde 0 y 
 
 ## 4. Predicción
 
-Escrita por Abel el **2026-10-13, antes de ejecutar**. Transcripción literal:
+Registrada el **2026-10-13, antes de la ejecución**, en el commit `bf7cebe`. Lo que sigue es la redacción formal de esa predicción, sin cambios de contenido; el texto original y una aclaración de la 3.2 (6 registros duplicados), también previa a la ejecución, constan en dicho commit.
 
-> 3.1 empieza desde cero, porque no logra resolver el offset que llevaba el grupo g.
-> 3.2 se procesan 6 registros dos veces dado que son los 2 registros que ya estaban en el grupo g. Se sigue cumpliendo la G9 porque se crean duplicados mas no se pierden registros como tal y la G7 si se incumple dado que B no comienza de su post-it, su post-it se perdio.
-> 3.3 funciona dado que esto genra el nuevo Offset, pero obtiene un Offset que empieza con el offset en 0, no con los valores de antes
-
-**Aclaración de Abel (2026-10-13, antes de ejecutar):** en la 3.2, el número de registros procesados dos veces es **6**.
+- **3.1** Opción (b): el consumidor B empieza desde el offset 0, porque no puede recuperar el offset confirmado del grupo `g`.
+- **3.2** Se procesan dos veces 6 registros: los ya confirmados por el grupo `g`. G9 se sigue cumpliendo, porque se producen duplicados pero no se pierde ningún registro. G7 se incumple, porque B no reanuda desde el offset confirmado del grupo, que se ha perdido.
+- **3.3** Opción (a): el commit funciona, porque genera un nuevo almacén de offsets; pero ese almacén empieza en el offset 0, no con los valores anteriores.
 
 Preguntas a las que responde:
 
@@ -44,16 +42,45 @@ Después de que A procese y confirme 6 registros, se obtiene el PID del proceso 
 
 ## 7. Evidencia recogida
 
-*Pendiente: se rellena después de ejecutar.*
+Ejecutado el 2026-10-13 a las 08:49 (hora local), después del commit `bf7cebe` que contiene la predicción.
+
+- `experiments/evidence/exp3.jsonl`: 11 líneas.
+- `experiments/evidence/console.log`: aviso del raylet sobre el worker 30280 (el `OffsetStore`), `SYSTEM_ERROR`.
 
 ## 8. Resultado observado
 
-*Pendiente.*
+| Paso | Observado |
+|---|---|
+| Consumidor A, `run(max_messages=6)` | Procesa los offsets 0 a 5; offset confirmado `{0: 6}` |
+| `taskkill` del `OffsetStore` (PID 30280) | Código 0; el proceso deja de existir |
+| A confirma con el handle viejo | Falla al instante con `ActorDiedError` |
+| Crear el consumidor B | Funciona (0,039 s). Posición inicial `{0: 0}`: `get_or_create_offset_store()` creó un almacén **nuevo y vacío** |
+| B procesa | 10 registros: offsets 0 a 9 |
+| Procesados dos veces | **6** (offsets 0 a 5) |
+| Offset confirmado al final | `{0: 10}`, en el almacén nuevo |
+
+**Comparación con la predicción: 2 de 3.**
+
+| Pregunta | Predicción | Observado | |
+|---|---|---|---|
+| 3.1 | (b) empieza desde 0 | Posición inicial 0 | ✅ |
+| 3.2 | 6 duplicados; G9 se cumple, G7 no | 6 duplicados (0 a 5); ninguno se pierde; no reanuda desde 6 | ✅ |
+| 3.3 | (a) funciona, porque se crea un almacén nuevo | (b) `ActorDiedError` | ❌ |
+
+**Por qué falló la 3.3:** A no vuelve a buscar el almacén por nombre; guarda el handle que obtuvo al crearse, y ese handle apunta al actor muerto. El almacén nuevo solo lo crea quien llama a `get_or_create_offset_store()` después de la caída, en este caso el consumidor B al construirse.
 
 ## 9. Conclusión
 
-*Pendiente.*
+Se **confirma** la afirmación. Al morir el almacén de offsets:
+
+- **G9 (at-least-once) se mantiene:** ningún registro se pierde; los 6 ya procesados se procesan otra vez.
+- **G7 (reanudación) se rompe:** B no puede distinguir "este grupo nunca confirmó nada" de "se perdieron los offsets", así que empieza en 0. La cantidad de duplicados crece con todo lo que el grupo había confirmado.
+- **Dos consumidores del mismo grupo terminan viendo almacenes distintos:** A falla con el viejo y B trabaja con uno nuevo. Nadie avisa de que el estado del grupo se reinició.
+
+**Para la Fase 2:** los offsets confirmados deben ser durables y replicados (Tarea 12), y la respuesta para un grupo desconocido debe ser explícita, no un 0 silencioso.
 
 ## 10. Incertidumbre restante
 
-*Pendiente.*
+- No se probó la caída del almacén **mientras** un consumidor confirma (¿qué commit queda?).
+- No se probó qué pasa si el almacén se cae y un consumidor que sigue vivo continúa: falla en su próximo commit, pero no se observó qué hace después su bucle `run()`.
+- Un solo nodo y una sola ejecución.

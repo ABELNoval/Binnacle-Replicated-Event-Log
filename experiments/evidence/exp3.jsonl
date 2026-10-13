@@ -1,0 +1,11 @@
+{"experiment": "exp3", "t": 1791895757.612, "step": "environment", "started_at": "2026-10-13T12:49:17.611481+00:00", "python": "3.13.0", "ray": "2.58.0", "os": "Windows-11-10.0.26300-SP0", "driver_pid": 32640, "hang_timeout_s": 10}
+{"experiment": "exp3", "t": 1791895757.68, "step": "append_10", "outcome": "ok", "elapsed_s": 0.019, "result": 0}
+{"experiment": "exp3", "t": 1791895757.722, "step": "consumer_a_run_max_6", "outcome": "ok", "elapsed_s": 0.009, "result": 6}
+{"experiment": "exp3", "t": 1791895757.723, "step": "consumer_a_processed", "offsets": [0, 1, 2, 3, 4, 5]}
+{"experiment": "exp3", "t": 1791895757.724, "step": "committed_before_kill", "outcome": "ok", "elapsed_s": 0.001, "result": {"0": 6}}
+{"experiment": "exp3", "t": 1791895758.209, "step": "kill_offset_store", "pid": 30280, "taskkill_returncode": 0, "alive_after_kill": false}
+{"experiment": "exp3", "t": 1791895758.212, "step": "consumer_a_commit_with_old_handle", "outcome": "error", "elapsed_s": 0.002, "error_type": "ActorDiedError", "error_classes": ["ActorDiedError", "RayActorError", "RayError", "Exception", "BaseException", "object"], "error": "The actor died unexpectedly before finishing this task. | \tclass_name: OffsetStore | \tactor_id: b7204db15b2778c5b331242b01000000"}
+{"experiment": "exp3", "t": 1791895758.251, "step": "consumer_b_create", "outcome": "ok", "elapsed_s": 0.039, "result": {"0": 0}}
+{"experiment": "exp3", "t": 1791895760.339, "step": "consumer_b_run", "outcome": "ok", "elapsed_s": 2.087, "result": 10}
+{"experiment": "exp3", "t": 1791895760.339, "step": "consumer_b_processed", "offsets": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], "processed_twice": [0, 1, 2, 3, 4, 5]}
+{"experiment": "exp3", "t": 1791895760.342, "step": "committed_after_b", "outcome": "ok", "elapsed_s": 0.003, "result": {"0": 10}}
