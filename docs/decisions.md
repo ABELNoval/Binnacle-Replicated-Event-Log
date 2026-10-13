@@ -1,193 +1,114 @@
-# Decisiones de diseño — Phase 0 (contrato gRPC)
+# Decisiones de diseño del contrato gRPC (Fase 0)
 
-> Documento vivo. Se cierra **antes** de generar código desde `proto/broker.proto`.
-> Cualquier cambio aquí obliga a regenerar y avisar al otro.
-> Estado: 🟡 En discusión / 🟢 Congelado
-> Última actualización: AAAA-MM-DD
-
----
+> **Estado:** en discusión. Las decisiones se cierran en el issue #22, junto con su conciliación con `proto/broker.proto`, **antes** de generar código a partir del proto. Cualquier cambio posterior obliga a regenerar el código.
 
 ## Contexto
 
-Este documento responde 7 preguntas que determinan cómo queda `broker.proto`.
-Cada decisión incluye **por qué** la tomamos, para que sirva después como
-justificación en la documentación final del proyecto.
+Este documento responde a siete preguntas que determinan la forma de `proto/broker.proto`. Cada decisión incluye su justificación, para que sirva como fundamento en la documentación final del proyecto.
+
+| # | Decisión | Estado |
+|---|---|---|
+| 1 | `key` y `value` son `bytes` | En discusión |
+| 2 | El productor asigna el timestamp; el broker lo sobrescribe si vale 0 | En discusión |
+| 3 | `offset` dentro de `Record`: el productor no lo usa y el broker lo asigna | En discusión |
+| 4 | `partition = -1`: el broker aplica hash a la key o round-robin | En discusión |
+| 5 | Errores de negocio como campo de la respuesta; errores de protocolo como código de estado gRPC | En discusión |
+| 6 | `Fetch` unario; `FetchStream` como ampliación posterior | En discusión |
+| 7 | Módulo Go `github.com/<usuario>/distsys-log` y paquete `brokerpb` | En discusión |
 
 ---
 
-## 1. ¿`key` y `value` son `bytes` o `string`?
+## 1. Tipo de `key` y `value`
 
 **Decisión:** `bytes`.
 
-**Por qué:**
-- Kafka permite payloads binarios; no queremos limitar el sistema a texto.
-- En Go, `bytes` mapea directo a `[]byte`, que es lo que vamos a escribir
-  en el archivo WAL sin conversiones.
-- `string` en protobuf fuerza UTF-8 válido y rompe con binario arbitrario.
+**Justificación:**
+- Los payloads pueden ser binarios; limitar el sistema a texto restringiría su uso.
+- En Go, `bytes` se corresponde directamente con `[]byte`, que es lo que se escribe en el WAL sin conversiones.
+- `string` en Protocol Buffers exige UTF-8 válido, lo que impide transportar datos binarios arbitrarios.
 
-**Consecuencia:** el productor y el consumidor de prueba (Semana 1) van a
-trabajar con `[]byte`; no pasa nada, es lo natural en Go.
+**Consecuencia:** el productor y el consumidor trabajan con `[]byte`, la representación natural en Go.
 
----
+## 2. Asignación del `timestamp` de `Record`
 
-## 2. ¿Quién pone el `timestamp` del `Record`?
+**Decisión:** el productor asigna el timestamp y el broker lo respeta. Si el productor envía `timestamp = 0`, el broker lo sustituye por `time.Now().UnixMilli()`.
 
-**Decisión:** el productor lo pone; el broker lo respeta tal cual.
-Si el productor manda `timestamp = 0`, el broker lo sobrescribe con
-`time.Now().UnixMilli()`.
+**Justificación:**
+- Asignarlo en el broker complica la replicación: cada réplica podría asignar un valor distinto si el mensaje se reenvía.
+- Usar `0` como "no asignado" evita añadir más adelante un campo `has_timestamp`.
 
-**Por qué:**
-- En Semana 1 el productor es nuestro propio cliente, así que controlamos
-  el reloj. Ponerlo en el broker complica el caso de replicación (cada
-  réplica podría poner uno distinto si se reenvía el mensaje).
-- La regla del `0` como "no seteado" evita tener que agregar un campo
-  `has_timestamp` después.
+**Consecuencia:** la regla debe documentarse junto al proto y en la documentación final, por tratarse de una decisión sobre la semántica de los datos.
 
-**Consecuencia:** documentar esto en el README del proto y en la
-documentación final, porque es una decisión de semántica de datos.
+## 3. Ubicación del `offset`
 
----
+**Decisión:** el offset es un campo `int64 offset` dentro de `Record`, con estas reglas:
+- En `Produce`, el productor lo envía en 0 y el broker lo ignora.
+- El broker asigna el offset real al añadir el registro y lo devuelve en `ProduceResponse.offset`.
+- En `Fetch`, el broker sí lo informa en cada `Record`, para que el consumidor conozca la posición exacta de cada mensaje.
 
-## 3. ¿El `offset` va dentro del `Record`?
+**Justificación:**
+- El consumidor necesita el offset de cada registro, no solo el del último, para confirmar posiciones parciales al procesar un lote.
+- Incluirlo en `Record` evita duplicar el campo en las respuestas.
 
-**Decisión:** sí, va como campo `int64 offset` dentro de `Record`, pero:
-- En `Produce`, el productor **lo manda en 0 y el broker lo ignora**.
-- El broker asigna el offset real al hacer append y lo devuelve en
-  `ProduceResponse.offset`.
-- En `Fetch`, el `Record.offset` **sí viene seteado** por el broker, para
-  que el consumidor sepa exactamente dónde quedó cada mensaje.
+**Consecuencia:** `Record` representa el mensaje *ya almacenado*, no el mensaje *en tránsito*, del mismo modo que lo modela Kafka.
 
-**Por qué:**
-- El consumidor necesita el offset por cada record (no solo el último)
-  para poder hacer commit de su posición parcial si procesa un batch.
-- Tenerlo en `Record` evita duplicar el campo en las respuestas.
-
-**Consecuencia:** queda claro que `Record` es la representación del
-mensaje *ya almacenado*, no la del mensaje *en tránsito*. Eso es
-exactamente como lo modela Kafka.
-
----
-
-## 4. ¿Cómo se elige la partición de un mensaje?
+## 4. Elección de la partición
 
 **Decisión:**
-- Si `ProduceRequest.partition >= 0`, el productor fija la partición
-  y el broker la respeta.
-- Si `ProduceRequest.partition == -1`, el broker hashea
-  `Record.key` (`hash(key) % num_partitions`) y decide.
-- Si la key viene vacía y `partition == -1`, el broker hace round-robin
-  entre las particiones del topic.
+- Si `ProduceRequest.partition >= 0`, el productor fija la partición y el broker la respeta.
+- Si `ProduceRequest.partition == -1`, el broker aplica un hash a `Record.key` (`hash(key) % num_partitions`).
+- Si la key está vacía y `partition == -1`, el broker reparte por round-robin entre las particiones del topic.
 
-**Por qué:**
-- Es exactamente el comportamiento de Kafka y lo vamos a poder
-  comparar en la documentación final.
-- Evita obligar al productor a conocer el número de particiones del
-  topic (no hace falta un `ListTopics` solo para publicar).
-- El round-robin con key vacía nos deja "orden total dentro de la
-  partición, sin orden entre particiones" que pide el PDF (objetivo 2).
+**Justificación:**
+- Reproduce el comportamiento de Kafka, lo que facilita la comparación en la documentación final.
+- El productor no necesita conocer el número de particiones del topic, así que no hace falta una consulta `ListTopics` solo para publicar.
+- El round-robin con key vacía mantiene el orden total dentro de cada partición, sin orden entre particiones (objetivo 2 del enunciado P13).
 
-**Consecuencia:** el hashing consistente queda del lado del broker en
-Semana 1. Si en Semana 2 el productor necesita saber la partición de
-antemano (p. ej. para mandar directo al líder), agregamos un RPC
-`ListTopics` o un campo en la respuesta. No lo hacemos ahora.
+**Consecuencia:** el hashing queda del lado del broker en el sistema de un solo nodo. Si más adelante el productor necesita conocer la partición de antemano (por ejemplo, para enviar directamente al líder), se añadirá una consulta de metadatos o un campo en la respuesta.
 
----
+## 5. Representación de los errores
 
-## 5. ¿Errores como campo o como gRPC status?
+**Decisión:** modelo híbrido.
+- **Errores de negocio** (topic inexistente, offset inválido, partición fuera de rango): `success = false` y `error = "mensaje"` en la respuesta, sin error gRPC.
+- **Errores de protocolo** (payload malformado, campo obligatorio vacío, versión incompatible): código de estado gRPC (`InvalidArgument`, `NotFound`, `Internal`).
 
-**Decisión:** híbrido.
-- **Errores de negocio** (topic no existe, offset inválido, partición
-  fuera de rango) → `success = false` + `error = "mensaje"` en la
-  respuesta. **No** se devuelve un error gRPC.
-- **Errores de protocolo** (payload malformado, campo requerido vacío,
-  versión incompatible) → código de estado gRPC (`InvalidArgument`,
-  `NotFound`, `Internal`).
+**Justificación:**
+- Los errores de negocio forman parte del funcionamiento normal: leer de un topic que aún no existe es una condición que el cliente debe poder tratar sin manejar excepciones.
+- Los errores de protocolo son excepcionales, y conviene que gRPC los propague como `status.Error`.
+- Las pruebas pueden comprobar `success == false` sin inspeccionar códigos gRPC.
 
-**Por qué:**
-- Los errores de negocio son parte normal de la operación: un
-  consumidor haciendo fetch en un topic que aún no se creó no es un
-  fallo de gRPC, es una condición que el cliente debe poder manejar
-  sin try/catch.
-- Los errores de protocolo sí son excepcionales y es útil que el
-  framework de gRPC los propague como `status.Error`.
-- Facilita los tests: podemos assertear `success == false` sin
-  inspeccionar códigos de gRPC.
+**Consecuencia:** el broker necesita una función auxiliar que construya respuestas de error de forma uniforme.
 
-**Consecuencia:** definir un pequeño helper en el broker para
-construir respuestas de error consistentes.
+## 6. `Fetch` unario o en streaming
 
----
+**Decisión:** `Fetch` unario para el broker de un solo nodo. Más adelante puede añadirse `rpc FetchStream(FetchRequest) returns (stream Record)` sin romper el contrato, ya que los RPC se añaden y no se modifican.
 
-## 6. ¿`Fetch` unario o streaming?
+**Justificación:**
+- Para un broker de un solo nodo con `Produce` y `Fetch` básicos, el streaming añade complejidad sin aportar al hito.
+- gRPC permite añadir RPC sin modificar los existentes, por lo que la decisión es reversible.
+- La lectura continua se resuelve en el cliente con un bucle de polling.
 
-**Decisión:** unario para Semana 1.
-Se agrega `rpc FetchStream(FetchRequest) returns (stream Record)`
-en Semana 3 **sin romper el contrato** (los RPCs se agregan, no se
-modifican).
+**Consecuencia:** al implementar los grupos de consumidores se evaluará si conviene migrar el consumidor a `FetchStream` para reducir la sobrecarga o mantener el polling.
 
-**Por qué:**
-- La Semana 1 es un broker de un solo nodo con `produce` y `fetch`
-  básicos. Streaming agrega complejidad que no aporta al hito.
-- gRPC permite agregar RPCs después sin tocar los existentes, así
-  que no nos estamos casando con nada.
-- El fetch continuo (polling) del consumidor se hace desde el
-  cliente con un loop; no necesitamos streaming en el transporte
-  todavía.
-
-**Consecuencia:** en Semana 3 revisamos si conviene migrar el
-consumidor a `FetchStream` para reducir overhead, o si dejamos
-polling. Es una decisión reversible.
-
----
-
-## 7. Nombre del módulo Go y del paquete
+## 7. Módulo Go y paquete generado
 
 **Decisión:**
-- Módulo Go: `github.com/<usuario>/distsys-log`
-  *(rellenar con el usuario real antes de cerrar esta decisión)*
-- Paquete generado: `brokerpb`
+- Módulo Go: `github.com/<usuario>/distsys-log` (pendiente de fijar la ruta definitiva antes de cerrar esta decisión).
+- Paquete generado: `brokerpb`.
 - `option go_package = "github.com/<usuario>/distsys-log/gen/brokerpb;brokerpb";`
 
-**Por qué:**
-- Tiene que estar fijado **antes** de generar código, porque el
-  `go_package` determina la ruta de import en todo el repo.
-- `brokerpb` (en vez de `proto` o `pb`) deja claro en los imports
-  que es código generado y de qué servicio.
+**Justificación:**
+- La ruta debe fijarse **antes** de generar código, porque `go_package` determina la ruta de importación en todo el repositorio.
+- `brokerpb` (en lugar de `proto` o `pb`) deja claro en los imports que se trata de código generado y a qué servicio pertenece.
 
-**Consecuencia:** si cambiamos de usuario/organización en GitHub
-después, hay que regenerar y actualizar todos los imports. Por eso
-lo decidimos ahora.
-
----
-
-## Resumen ejecutivo
-
-| # | Decisión | Estado |
-|---|----------|--------|
-| 1 | `key`/`value` son `bytes` | 🟡 |
-| 2 | Productor pone timestamp; broker sobrescribe si es 0 | 🟡 |
-| 3 | `offset` en `Record`; productor lo ignora, broker lo asigna | 🟡 |
-| 4 | `partition = -1` → broker hashea key o hace round-robin | 🟡 |
-| 5 | Errores de negocio como campo; protocolo como gRPC status | 🟡 |
-| 6 | `Fetch` unario ahora; `FetchStream` en Semana 3 | 🟡 |
-| 7 | Módulo `github.com/<usuario>/distsys-log`, paquete `brokerpb` | 🟡 |
-
-**Criterio de cierre:** los 7 quedan en 🟢 y los dos firmamos abajo.
-
----
-
-## Firmas
-
-- [ ] Compañero A — fecha:
-- [ ] Compañero B — fecha:
+**Consecuencia:** un cambio posterior de usuario u organización en GitHub obligaría a regenerar el código y actualizar todos los imports.
 
 ---
 
 ## Cambios posteriores
 
-Cualquier cambio a estas decisiones se agrega abajo con fecha y motivo.
-No se edita lo de arriba; se agrega una enmienda.
+Cada cambio a estas decisiones se añade aquí con fecha y motivo. El texto anterior no se edita: se añade una enmienda.
 
-| Fecha | Campo afectado | Cambio | Motivo |
-|-------|----------------|--------|--------|
-|       |                |        |        |
+| Fecha | Sección afectada | Cambio | Motivo |
+|---|---|---|---|
+| | | | |
