@@ -82,11 +82,11 @@ Tabla con las filas y columnas exactas de la metodología. Debajo, notas con la 
 ### Evidencia por fila
 
 - **Ejecución remota:** `test_partitions_run_in_separate_processes` y `demo_partitions.py` muestran un PID distinto por partición, diferente del PID del driver. La única Ray task es `produce_batch` en `test_partition.py`.
-- **Worker con estado:** `partition.py`, `registry.py` y `offsets.py`. Ningún actor declara `max_restarts`. Qué se pierde al morir uno queda **por verificar** en el #29.
+- **Worker con estado:** `partition.py`, `registry.py` y `offsets.py`. Ningún actor declara `max_restarts`. Qué se pierde al morir uno quedó verificado en el #29 (sección 4).
 - **Scheduling:** ningún actor declara recursos ni opciones de ubicación; `whereami()` solo deja ver la decisión de Ray después de tomada.
 - **Resultado remoto:** todas las llamadas usan `ray.get(...)`. `Producer.send` devuelve el offset de `append` como confirmación.
 - **Membresía:** `get_or_create_registry()` y `get_or_create_offset_store()` usan `name`, `namespace`, `lifetime="detached"` y `get_if_exists=True`.
-- **Reintento:** `max_restarts` y `max_task_retries` son los valores por defecto documentados por Ray; no se cambian en ningún sitio. Comportamiento real ante un fallo: **por verificar** en el #29.
+- **Reintento:** `max_restarts` y `max_task_retries` son los valores por defecto documentados por Ray; no se cambian en ningún sitio. Comportamiento real ante un fallo verificado en el #29: ni reinicio ni reintento, error inmediato al llamador (sección 4).
 - **Recursos:** verificado el 2026-10-05. Con `ray.init(num_cpus=1)` conviven el registro y 8 particiones, cada una en su proceso, y la CPU disponible sigue en 1.0. El `num_cpus=max(4, particiones + 2)` de `demo_producer_consumer.py` no es necesario para los actores.
 - **Observabilidad:** verificado el 2026-10-05. Con el dashboard desactivado, `ray.util.state.list_actors()` falla con `ServerUnavailable`.
 
@@ -107,11 +107,20 @@ Requisitos que aparecieron al construir el prototipo y que la tabla general no s
 
 ---
 
-## 4. Por verificar en el experimento inicial (#29)
+## 4. Hipótesis del experimento inicial (#29)
 
-Afirmaciones de este mapa que hoy son hipótesis. Cada una necesita una predicción escrita antes de provocar el fallo:
+Verificadas el 2026-10-13 con `ray-prototype/fault_experiments.py`. Las predicciones se escribieron y se commitearon antes de ejecutar (`bf7cebe`). Registros completos en `experiments/`.
 
-1. Si muere el proceso de una partición, ¿se pierde su log y la partición queda inutilizable? (`max_restarts=0`)
-2. Si muere el registro de topics, ¿mueren también sus particiones, por ser su dueño?
-3. Si una partición muere en medio de un `append`, ¿qué error ve el productor y puede saber si el lote se escribió?
-4. Si muere el almacén de offsets, ¿un consumidor nuevo vuelve a empezar desde 0 y reprocesa todo?
+| # | Hipótesis | Resultado | Evidencia |
+|---|---|---|---|
+| 1 | Si muere el proceso de una partición, se pierde su log y la partición queda inutilizable | **Confirmada.** Cada llamada a la partición muerta falla al instante con `ActorDiedError` (subclase de `RayActorError`); los registros confirmados quedan inaccesibles; Ray no la reinicia; el registro sigue entregando el handle muerto. Las demás particiones no se ven afectadas | `experiments/exp1-partition-crash.md` |
+| 2 | Si muere el registro de topics, mueren también sus particiones, por ser su dueño | **Confirmada.** Las 3 particiones desaparecen en menos de 1 s (*fate-sharing*: Ray las elimina, el raylet solo informa de la muerte del registro). Un cliente nuevo obtiene un registro nuevo y vacío, y recibe `UnknownTopic`: la pérdida es silenciosa | `experiments/exp2-registry-crash.md` |
+| 3 | Si una partición muere en medio de un `append`, ¿puede saber el productor si el lote se escribió? | **Sigue abierta.** El crash se provocó entre envíos, no durante uno; pasa a los experimentos F8 de la Fase 3 | — |
+| 4 | Si muere el almacén de offsets, un consumidor nuevo empieza desde 0 y reprocesa todo | **Confirmada.** El consumidor nuevo obtiene un almacén nuevo y vacío, empieza en 0 y reprocesa los 6 registros ya confirmados (G9 se mantiene, G7 se rompe). El consumidor viejo falla al confirmar con `ActorDiedError` | `experiments/exp3-offset-store-crash.md` |
+
+**Qué cambia en el mapa:**
+
+- **Worker con estado:** el estado de un actor muere con su proceso y no se recupera. Además, quien crea un actor es su dueño: si el dueño muere, se lleva consigo a los actores que creó.
+- **Reintento:** confirmado que con los valores por defecto no hay reinicio ni reintento: el error llega al llamador en 1–2 ms, sin cuelgues.
+- **Membresía y descubrimiento:** buscar un actor por nombre después de que muera crea uno **nuevo y vacío** (`get_if_exists=True`), en lugar de avisar de la pérdida. El descubrimiento por nombre esconde los fallos.
+- **Punto único de fallo:** el registro de topics. Su caída borra a la vez los metadatos y los datos de todos los topics.
