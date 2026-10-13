@@ -1,6 +1,6 @@
 # Contrato observable de Binnacle
 
-> **Estado:** provisional. Se congela al cerrar la puerta de salida de la Fase 1 (#30). Desde ese momento no se edita: cualquier cambio se agrega como enmienda al final, con fecha y motivo.
+> **Estado:** congelado el 2026-10-13, al cerrar la puerta de salida de la Fase 1 (`docs/phase1-exit-gate.md`). No se edita: cualquier cambio se agrega como enmienda en la sección 6, con fecha y motivo.
 
 ## Qué es este documento
 
